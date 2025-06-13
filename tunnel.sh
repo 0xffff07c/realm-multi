@@ -109,7 +109,8 @@ start_ca_server() {
     fi
     [ -f "$CA_TOKEN_FILE" ] || gen_token > "$CA_TOKEN_FILE"
     CA_TOKEN=$(cat "$CA_TOKEN_FILE")
-    cat > $WORKDIR/ca.cgi <<EOF
+    mkdir -p $WORKDIR/cgi-bin
+    cat > $WORKDIR/cgi-bin/ca.cgi <<EOF
 #!/bin/sh
 echo "Content-type: application/x-pem-file"
 echo
@@ -119,16 +120,16 @@ else
   echo "Invalid or missing token"
 fi
 EOF
-    chmod +x $WORKDIR/ca.cgi
+    chmod +x $WORKDIR/cgi-bin/ca.cgi
     pkill -f "busybox httpd.*-p 9001" 2>/dev/null || true
     cd $WORKDIR
-    nohup busybox httpd -f -p 9001 -h . -c / > ca_httpd.log 2>&1 &
+    nohup busybox httpd -f -p 9001 -h . -c /cgi-bin > ca_httpd.log 2>&1 &
     PUB_IP=$(curl -s --max-time 4 https://api.ipify.org | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     if [ -z "$PUB_IP" ]; then
         PUB_IP=$(hostname -I | awk '{print $1}')
     fi
     echo "[√] CA 拉取服务已启动 (9001)，Token: $CA_TOKEN"
-    echo "curl \"http://$PUB_IP:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
+    echo "curl \"http://$PUB_IP:9001/cgi-bin/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
     read -p "按回车返回菜单..."
 }
 
