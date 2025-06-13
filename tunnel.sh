@@ -1,15 +1,13 @@
 #!/bin/bash
 set -e
+# ====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量+CA 拉取）======
+# 项目地址: https://github.com/zhboner/realm
+# 免责声明：仅供学习与交流，请勿用于非法用途。
+# 脚本将在 /opt/realm/ 目录下自动部署和运行。
 
 WORKDIR="/opt/realm"
 mkdir -p $WORKDIR
 cd $WORKDIR
-
-echo -e "\033[36m====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量+CA 拉取）======\033[0m"
-echo "项目地址: https://github.com/zhboner/realm"
-echo "免责声明：仅供学习与交流，请勿用于非法用途。"
-echo -e "脚本将在 \033[32m/opt/realm/\033[0m 目录下自动部署和运行。\n"
-sleep 1
 
 REALM_BIN="/usr/local/bin/realm"
 CONF_FILE="$WORKDIR/realm.json"
