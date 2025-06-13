@@ -219,10 +219,13 @@ gen_conf() {
         TLS_ON=true
     fi
 
+    # 最外层 JSON 对象，含 log 字段和 network 数组
+    echo '{ "log": { "level": "info", "output": "stdout" }, "network": [' > $CONF_FILE
+
+    COUNT=$(wc -l < $RULES_FILE)
+    IDX=1
+
     if [ "$ROLE" = "server" ]; then
-        echo "[" > $CONF_FILE
-        COUNT=$(wc -l < $RULES_FILE)
-        IDX=1
         while read LPORT TARGET PW; do
             SEP=","
             [ "$IDX" = "$COUNT" ] && SEP=""
@@ -261,12 +264,7 @@ EOF
             fi
             IDX=$((IDX+1))
         done < $RULES_FILE
-        echo "]" >> $CONF_FILE
-        echo "服务端配置已同步: $CONF_FILE"
     else
-        echo "[" > $CONF_FILE
-        COUNT=$(wc -l < $RULES_FILE)
-        IDX=1
         while read LPORT RADDR TARGET PW CACERT; do
             SEP=","
             [ "$IDX" = "$COUNT" ] && SEP=""
@@ -307,9 +305,10 @@ EOF
             fi
             IDX=$((IDX+1))
         done < $RULES_FILE
-        echo "]" >> $CONF_FILE
-        echo "客户端配置已同步: $CONF_FILE"
     fi
+
+    echo ']}' >> $CONF_FILE
+    echo "配置已同步: $CONF_FILE"
     sleep 1
 }
 
