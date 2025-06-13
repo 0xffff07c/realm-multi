@@ -129,9 +129,14 @@ EOF
 }
 
 stop_ca_server() {
-    pkill -f "busybox httpd -f -p 9001" && echo "CA 服务已停止" || echo "未检测到 CA 服务"
+    pkill -f "busybox httpd -f -p 9001" 2>/dev/null
+    RETVAL=$?
     rm -f $WORKDIR/ca.cgi
-    echo "停止成功！"
+    if [ $RETVAL -eq 0 ]; then
+        echo "CA 服务已停止！"
+    else
+        echo "未检测到 CA 服务，无需停止。"
+    fi
     read -p "按回车返回菜单..."
 }
 
