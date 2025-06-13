@@ -187,9 +187,14 @@ add_rule() {
         read -p "服务器密码: " PW
         read -p "是否启用 TLS? (y/N): " use_tls
         if [[ "$use_tls" =~ ^[Yy]$ ]]; then
-            read -p "请输入出口服务器 CA 拉取 token: " CA_TOKEN
-            read -p "请输入出口服务器 IP: " CA_IP
-            curl "http://$CA_IP:9001/ca.cgi?token=$CA_TOKEN" -o $CA_FILE || { echo "CA 拉取失败，请检查 IP 与 Token！"; return 1; }
+            echo "请粘贴服务端生成的 curl 命令（整条粘贴即可回车）："
+            read -r CA_CURL_CMD
+            CA_URL=$(echo "$CA_CURL_CMD" | grep -oP 'http://[0-9\.]+:9001/cgi-bin/ca\.cgi\?token=[^"]+')
+            if [[ -z "$CA_URL" ]]; then
+                echo "命令无效，请检查格式！"
+                return 1
+            fi
+            curl "$CA_URL" -o $CA_FILE || { echo "CA 拉取失败，请检查命令！"; return 1; }
             TLS="true"
         else
             TLS="false"
