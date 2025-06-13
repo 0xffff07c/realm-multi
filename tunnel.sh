@@ -187,6 +187,9 @@ add_rule() {
         read -p "服务器密码: " PW
         read -p "是否启用 TLS? (y/N): " use_tls
         if [[ "$use_tls" =~ ^[Yy]$ ]]; then
+            # 自动从RADDR提取IP
+            S_IP=$(echo "$RADDR" | cut -d: -f1)
+            CA_FILENAME="ca-${S_IP}.pem"
             echo "请粘贴服务端生成的 curl 命令（整条粘贴即可回车）："
             read -r CA_CURL_CMD
             CA_URL=$(echo "$CA_CURL_CMD" | grep -oP 'http://[0-9\.]+:9001/cgi-bin/ca\.cgi\?token=[^"]+')
@@ -194,13 +197,14 @@ add_rule() {
                 echo "命令无效，请检查格式！"
                 return 1
             fi
-            curl "$CA_URL" -o $CA_FILE || { echo "CA 拉取失败，请检查命令！"; return 1; }
+            curl "$CA_URL" -o "$WORKDIR/$CA_FILENAME" || { echo "CA 拉取失败，请检查命令！"; return 1; }
             TLS="true"
         else
             TLS="false"
+            CA_FILENAME=""
         fi
-        echo "$LPORT $RADDR $TARGET $PW $TLS" >> $RULES_FILE
-        echo "已添加: $LPORT -> $RADDR -> $TARGET (密码: $PW, TLS: $TLS)"
+        echo "$LPORT $RADDR $TARGET $PW $TLS $CA_FILENAME" >> $RULES_FILE
+        echo "已添加: $LPORT -> $RADDR -> $TARGET (密码: $PW, TLS: $TLS, CA: $CA_FILENAME)"
     fi
     sleep 1
     gen_conf
@@ -306,7 +310,7 @@ gen_conf() {
     IDX=1
 
     if [ "$ROLE" = "server" ]; then
-        while read LPORT TARGET PW TLS; do
+        while read LPORT TARGET PW TLS _; do
             SEP=","
             [ "$IDX" = "$COUNT" ] && SEP=""
             if [ "$TLS" = "true" ]; then
@@ -345,7 +349,7 @@ EOF
             IDX=$((IDX+1))
         done < $RULES_FILE
     else
-        while read LPORT RADDR TARGET PW TLS; do
+        while read LPORT RADDR TARGET PW TLS CA_FILENAME; do
             SEP=","
             [ "$IDX" = "$COUNT" ] && SEP=""
             if [ "$TLS" = "true" ]; then
@@ -356,7 +360,7 @@ EOF
     "tls": {
       "enabled": true,
       "insecure": false,
-      "ca": "$CA_FILE"
+      "ca": "$WORKDIR/$CA_FILENAME"
     },
     "transport": "quic",
     "udp": true,
