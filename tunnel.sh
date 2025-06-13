@@ -5,7 +5,7 @@ WORKDIR="/opt/realm"
 mkdir -p $WORKDIR
 cd $WORKDIR
 
-echo -e "\033[36m====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量）======\033[0m"
+echo -e "\033[36m====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量+Token 拉取证书）======\033[0m"
 echo "项目地址: https://github.com/zhboner/realm"
 echo "免责声明：仅供学习与交流，请勿用于非法用途。"
 echo -e "脚本将在 \033[32m/opt/realm/\033[0m 目录下自动部署和运行。\n"
@@ -21,8 +21,11 @@ CERT_FILE="$WORKDIR/cert.pem"
 KEY_FILE="$WORKDIR/key.pem"
 CA_FILE="$WORKDIR/ca.pem"
 INIT_FLAG="$WORKDIR/.realm_inited"
+CA_TOKEN_FILE="$WORKDIR/ca_token.txt"
+CA_SERVER_PID_FILE="$WORKDIR/ca_server.pid"
 
 gen_pw() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16; }
+gen_token() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 24; }
 
 install_realm() {
     echo "[*] 自动下载并安装最新 realm 二进制..."
@@ -41,7 +44,6 @@ install_realm() {
             ;;
     esac
 
-    # 获取最新版本号
     VERSION=$(curl -s https://api.github.com/repos/zhboner/realm/releases/latest | grep tag_name | cut -d '"' -f4)
     if [ -z "$VERSION" ]; then
         echo "无法获取 realm 最新版本号，网络或 Github API 问题。"
@@ -64,11 +66,54 @@ install_realm() {
     read -p "按回车返回菜单..."
 }
 
-
 generate_cert() {
     openssl req -x509 -newkey rsa:2048 -keyout $KEY_FILE -out $CERT_FILE -days 3650 -nodes -subj "/CN=realm"
     cp $CERT_FILE $CA_FILE
     echo "[√] 证书($CERT_FILE)和私钥($KEY_FILE)已生成"
+}
+
+start_ca_server() {
+    if ! [ -f "$CA_TOKEN_FILE" ]; then
+        gen_token > "$CA_TOKEN_FILE"
+    fi
+    # 生成 python ca_server.py
+    cat > "$WORKDIR/ca_server.py" <<EOF
+from flask import Flask, send_file, request, abort
+app = Flask(__name__)
+TOKEN = open("$CA_TOKEN_FILE").read().strip()
+@app.route("/ca.pem")
+def ca():
+    if request.args.get("token") != TOKEN:
+        abort(403)
+    return send_file("$CA_FILE")
+app.run(host="0.0.0.0", port=9001)
+EOF
+    pip3 install flask >/dev/null 2>&1 || python3 -m pip install flask
+    nohup python3 "$WORKDIR/ca_server.py" > "$WORKDIR/ca_server.log" 2>&1 &
+    echo $! > "$CA_SERVER_PID_FILE"
+    echo "[√] CA 证书 HTTP 服务已启动，监听 9001 端口"
+}
+
+stop_ca_server() {
+    if [ -f "$CA_SERVER_PID_FILE" ]; then
+        kill $(cat "$CA_SERVER_PID_FILE") 2>/dev/null || true
+        rm -f "$CA_SERVER_PID_FILE"
+        echo "[*] CA 证书 HTTP 服务已停止"
+    else
+        echo "未检测到 CA 证书服务进程"
+    fi
+    sleep 1
+}
+
+show_ca_token() {
+    echo
+    echo "[证书拉取 Token]: \033[36m$(cat $CA_TOKEN_FILE)\033[0m"
+    CA_IP=$(hostname -I | awk '{print $1}')
+    echo "[curl 拉取命令示例]:"
+    echo "curl \"http://$CA_IP:9001/ca.pem?token=$(cat $CA_TOKEN_FILE)\" -o /opt/realm/ca-出口名.pem"
+    echo "请将上述命令提供给客户端对应规则用户！"
+    echo
+    read -p "按回车返回菜单..."
 }
 
 init_server() {
@@ -78,6 +123,8 @@ init_server() {
     if [[ "$use_tls" =~ ^[Yy]$ ]]; then
         echo "tls" > $TLS_FLAG
         [ -f "$CERT_FILE" ] || generate_cert
+        [ -f "$CA_TOKEN_FILE" ] || gen_token > "$CA_TOKEN_FILE"
+        start_ca_server
         echo "[*] TLS已启用，证书路径: $CERT_FILE，私钥: $KEY_FILE"
     else
         rm -f $TLS_FLAG
@@ -95,9 +142,6 @@ init_server() {
 init_client() {
     clear
     echo "=== Realm 客户端初始化 ==="
-    if [ -f "$TLS_FLAG" ]; then
-        echo "[*] 服务端TLS已启用，CA证书路径: $CA_FILE"
-    fi
     touch $RULES_FILE
     touch $PW_FILE
     echo "client" > $ROLE_FILE
@@ -120,30 +164,33 @@ add_rule() {
         PW=$(gen_pw)
         echo "$LPORT $TARGET $PW" >> $RULES_FILE
         echo "已添加: $LPORT --> $TARGET, 密码: $PW"
+        restart_server
     else
         read -p "本地监听端口: " LPORT
         read -p "服务端 IP:端口: " RADDR
         read -p "目标 IP:端口: " TARGET
         read -p "服务器密码: " PW
-        if [ -f "$TLS_FLAG" ]; then
-            echo "[*] 填写服务端 CA 证书路径，回车默认: $CA_FILE"
-            read -p "CA证书路径: " CACERT
-            CACERT=${CACERT:-$CA_FILE}
+        read -p "该出口是否启用 TLS？[y/N]: " use_tls
+        if [[ "$use_tls" =~ ^[Yy]$ ]]; then
+            read -p "请输入证书拉取 token: " CA_TOKEN
+            read -p "请输入出口服务端 IP: " CA_IP
+            CA_DEST="/opt/realm/ca-${LPORT}.pem"
+            # 拉取 CA
+            if curl --connect-timeout 3 -s "http://$CA_IP:9001/ca.pem?token=$CA_TOKEN" -o "$CA_DEST"; then
+                echo "[√] 已自动拉取 CA 证书到 $CA_DEST，将自动启用 TLS"
+                CACERT="$CA_DEST"
+            else
+                echo "[!] 拉取 CA 证书失败，未启用 TLS"
+                CACERT=""
+            fi
         else
             CACERT=""
         fi
         echo "$LPORT $RADDR $TARGET $PW $CACERT" >> $RULES_FILE
         echo "已添加: $LPORT -> $RADDR -> $TARGET (密码: $PW)"
-    fi
-    sleep 1
-    gen_conf
-    
-    # 自动重启
-    if [[ $role == "server" ]]; then
-        restart_server
-    else
         restart_client
     fi
+    sleep 1
     read -p "按回车返回菜单..."
 }
 
@@ -157,9 +204,6 @@ del_rule() {
         if [[ "$IDX" =~ ^[0-9]+$ ]] && [ "$IDX" -ge 1 ] && [ "$IDX" -le "$(wc -l < $RULES_FILE)" ]; then
             sed -i "${IDX}d" $RULES_FILE
             echo "已删除 #$IDX"
-            sleep 1
-            gen_conf
-            # 自动重启
             role=$(detect_role)
             if [[ $role == "server" ]]; then
                 restart_server
@@ -192,6 +236,7 @@ show_server_info() {
         awk '{print "监听端口: " $1 ", 目标: " $2 ", 密码: " $3}' $RULES_FILE
         if [ -f "$TLS_FLAG" ]; then
             echo "TLS 证书: $CERT_FILE"
+            show_ca_token
         else
             echo "未启用TLS"
         fi
@@ -217,7 +262,6 @@ server_status() {
 
 client_status() {
     echo -e "\n\033[32m[客户端进程状态]\033[0m"
-    # 更宽松检测：无论路径如何都能查到
     PID=$(pgrep -f "realm.*-c $CONF_FILE")
     if [ -n "$PID" ]; then
         echo "realm 已运行，进程ID：$PID"
@@ -229,7 +273,6 @@ client_status() {
     read -p "按回车返回菜单..."
 }
 
-
 gen_conf() {
     ROLE=$(detect_role)
     TLS_ON=false
@@ -237,9 +280,7 @@ gen_conf() {
         TLS_ON=true
     fi
 
-    # 最外层 JSON 对象，含 log 字段和 network 数组
     echo '{ "log": { "level": "info", "output": "stdout" }, "endpoints": [' > $CONF_FILE
-
     COUNT=$(wc -l < $RULES_FILE)
     IDX=1
 
@@ -336,7 +377,6 @@ restart_server() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
     nohup $REALM_BIN -c $CONF_FILE > $WORKDIR/realm-server.log 2>&1 &
     echo "realm 已重启"
-    
 }
 
 restart_client() {
@@ -345,7 +385,6 @@ restart_client() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
     nohup $REALM_BIN -c $CONF_FILE > $WORKDIR/realm-client.log 2>&1 &
     echo "realm 已重启"
-   
 }
 
 stop_server() { pkill -f "$REALM_BIN.*-c $CONF_FILE" && echo "服务端已停止" || echo "服务端未运行"; read -p "按回车返回菜单..."; }
@@ -355,6 +394,7 @@ log_client() { tail -n 50 $WORKDIR/realm-client.log || echo "无日志"; read -p
 
 uninstall_realm() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
+    stop_ca_server
     rm -rf $WORKDIR $REALM_BIN
     echo "[√] realm 相关文件和配置均已彻底删除。"
     read -p "按回车返回..."
@@ -377,7 +417,7 @@ select_role() {
 server_menu() {
     while true; do
         clear
-        echo -e "\033[32m==== Nuro · Realm(加密隧道) 服务端菜单 ====\033[0m"
+        echo -e "\033[32m==== Nuro · Realm(隧道) 服务端菜单 ====\033[0m"
         echo "1) 一键安装/升级 realm"
         echo "2) 初始化配置并启动"
         echo "3) 添加端口转发规则"
@@ -389,9 +429,12 @@ server_menu() {
         echo "9) 查看当前转发规则与密码"
         echo "10) 查看当前运行状态"
         echo "11) 卸载 realm"
+        echo "12) 查看证书拉取 Token/命令"
+        echo "13) 重启 CA 证书服务"
+        echo "14) 停止 CA 证书服务"
         echo "0) 退出"
         echo "-----------------------------"
-        read -p "请选择 [0-11]: " choice
+        read -p "请选择 [0-14]: " choice
         case $choice in
             1) install_realm ;;
             2) init_server ;;
@@ -404,6 +447,9 @@ server_menu() {
             9) show_server_info ;;
             10) server_status ;;
             11) uninstall_realm ;;
+            12) show_ca_token ;;
+            13) stop_ca_server; start_ca_server ;;
+            14) stop_ca_server ;;
             0) exit 0 ;;
             *) echo "无效选择，重新输入！" && sleep 1 ;;
         esac
@@ -413,7 +459,7 @@ server_menu() {
 client_menu() {
     while true; do
         clear
-        echo -e "\033[36m==== Nuro · Realm(加密隧道) 客户端菜单 ====\033[0m"
+        echo -e "\033[36m==== Nuro · Realm(隧道) 客户端菜单 ====\033[0m"
         echo "1) 一键安装/升级 realm"
         echo "2) 初始化配置并启动"
         echo "3) 添加端口转发规则"
