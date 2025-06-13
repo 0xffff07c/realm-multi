@@ -122,14 +122,17 @@ EOF
     chmod +x $WORKDIR/ca.cgi
     pkill -f "busybox httpd.*-p 9001" 2>/dev/null || true
     nohup busybox httpd -f -p 9001 -h $WORKDIR -c '**.cgi' > $WORKDIR/ca_httpd.log 2>&1 &
-    PUB_IP=$(curl -s --max-time 4 https://api-ipv4.ip.sb/ip || hostname -I | awk '{print $1}')
+    PUB_IP=$(curl -s --max-time 4 https://api.ipify.org | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    if [ -z "$PUB_IP" ]; then
+        PUB_IP=$(hostname -I | awk '{print $1}')
+    fi
     echo "[√] CA 拉取服务已启动 (9001)，Token: $CA_TOKEN"
     echo "curl \"http://$PUB_IP:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
     read -p "按回车返回菜单..."
 }
 
 stop_ca_server() {
-    pkill -f "busybox httpd -f -p 9001" 2>/dev/null
+    pkill -f "busybox httpd.*-p 9001" 2>/dev/null
     RETVAL=$?
     rm -f $WORKDIR/ca.cgi
     if [ $RETVAL -eq 0 ]; then
@@ -148,7 +151,10 @@ show_ca_token() {
     fi
     [ -f "$CA_TOKEN_FILE" ] || { echo "未生成 CA Token，先启动一次 CA 拉取服务！"; sleep 1; return; }
     CA_TOKEN=$(cat "$CA_TOKEN_FILE")
-    PUB_IP=$(curl -s --max-time 4 https://api-ipv4.ip.sb/ip || hostname -I | awk '{print $1}')
+    PUB_IP=$(curl -s --max-time 4 https://api.ipify.org | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+    if [ -z "$PUB_IP" ]; then
+        PUB_IP=$(hostname -I | awk '{print $1}')
+    fi
     echo "[*] CA 拉取 Token: $CA_TOKEN"
     echo "[*] CA 拉取命令："
     echo "curl \"http://$PUB_IP:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
