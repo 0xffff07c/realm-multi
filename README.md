@@ -162,9 +162,9 @@ ls /opt/realm/ca-*.pem
 
 ---
 
-## 九、更多脚本和维护
+## 九、个人博客教程
 
-请访问：[https://github.com/nuro-hia/realm](https://github.com/nuro-hia/realm)  
+请访问：[Nuro](https://nuro.cc/index.php/archives/14/)  
 脚本持续更新，欢迎 star、issue 反馈需求！
 
 ---
