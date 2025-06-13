@@ -220,7 +220,7 @@ gen_conf() {
     fi
 
     # 最外层 JSON 对象，含 log 字段和 network 数组
-    echo '{ "log": { "level": "info", "output": "stdout" }, "network": [' > $CONF_FILE
+    echo '{ "log": { "level": "info", "output": "stdout" }, "endpoints": [' > $CONF_FILE
 
     COUNT=$(wc -l < $RULES_FILE)
     IDX=1
