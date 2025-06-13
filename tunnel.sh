@@ -137,6 +137,13 @@ add_rule() {
     fi
     sleep 1
     gen_conf
+    
+    # 自动重启
+    if [[ $role == "server" ]]; then
+        restart_server
+    else
+        restart_client
+    fi
     read -p "按回车返回菜单..."
 }
 
@@ -152,6 +159,13 @@ del_rule() {
             echo "已删除 #$IDX"
             sleep 1
             gen_conf
+            # 自动重启
+            role=$(detect_role)
+            if [[ $role == "server" ]]; then
+                restart_server
+            else
+                restart_client
+            fi
             break
         else
             echo "无效选择，请输入正确的序号。"
