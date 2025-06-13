@@ -129,7 +129,7 @@ EOF
         PUB_IP=$(hostname -I | awk '{print $1}')
     fi
     echo "[√] CA 拉取服务已启动 (9001)，Token: $CA_TOKEN"
-    echo "curl \"http://$PUB_IP:9001/cgi-bin/ca.cgi?token=$CA_TOKEN\" -o $CA_FILE"
+    echo "curl \"http://$PUB_IP:9001/cgi-bin/ca.cgi?token=$CA_TOKEN\" -o /opt/realm/ca-$PUB_IP.pem"
     read -p "按回车返回菜单..."
 }
 
@@ -157,9 +157,7 @@ show_ca_token() {
     if [ -z "$PUB_IP" ]; then
         PUB_IP=$(hostname -I | awk '{print $1}')
     fi
-    echo "[*] CA 拉取 Token: $CA_TOKEN"
-    echo "[*] CA 拉取命令："
-    echo "curl \"http://$PUB_IP:9001/cgi-bin/ca.cgi?token=$CA_TOKEN\" -o $CA_FILE"
+    echo "curl \"http://$PUB_IP:9001/cgi-bin/ca.cgi?token=$CA_TOKEN\" -o /opt/realm/ca-$PUB_IP.pem"
     read -p "按回车返回菜单..."
 }
 
