@@ -336,7 +336,7 @@ restart_server() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
     nohup $REALM_BIN -c $CONF_FILE > $WORKDIR/realm-server.log 2>&1 &
     echo "realm 已重启"
-    read -p "按回车返回菜单..."
+    
 }
 
 restart_client() {
@@ -345,7 +345,7 @@ restart_client() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
     nohup $REALM_BIN -c $CONF_FILE > $WORKDIR/realm-client.log 2>&1 &
     echo "realm 已重启"
-    read -p "按回车返回菜单..."
+   
 }
 
 stop_server() { pkill -f "$REALM_BIN.*-c $CONF_FILE" && echo "服务端已停止" || echo "服务端未运行"; read -p "按回车返回菜单..."; }
