@@ -241,12 +241,16 @@ show_server_info() {
 
 server_status() {
     echo -e "\n\033[32m[服务端进程状态]\033[0m"
-    PID=$(pgrep -f "realm.*-c $CONF_FILE")
-    if [ -n "$PID" ]; then
-        echo "realm 已运行，进程ID：$PID"
-        ss -ntulp | grep realm | grep LISTEN
+    if [ ! -s "$RULES_FILE" ]; then
+        echo -e "\033[33m尚未添加任何端口转发规则，请先添加规则！\033[0m"
     else
-        echo "realm 未运行"
+        PID=$(pgrep -f "realm.*-c $CONF_FILE")
+        if [ -n "$PID" ]; then
+            echo "realm 已运行，进程ID：$PID"
+            ss -ntulp | grep realm | grep LISTEN
+        else
+            echo "realm 未运行"
+        fi
     fi
     echo
     read -p "按回车返回菜单..."
@@ -254,12 +258,16 @@ server_status() {
 
 client_status() {
     echo -e "\n\033[32m[客户端进程状态]\033[0m"
-    PID=$(pgrep -f "realm.*-c $CONF_FILE")
-    if [ -n "$PID" ]; then
-        echo "realm 已运行，进程ID：$PID"
-        ss -ntulp | grep realm | grep LISTEN
+    if [ ! -s "$RULES_FILE" ]; then
+        echo -e "\033[33m尚未添加任何端口转发规则，请先添加规则！\033[0m"
     else
-        echo "realm 未运行"
+        PID=$(pgrep -f "realm.*-c $CONF_FILE")
+        if [ -n "$PID" ]; then
+            echo "realm 已运行，进程ID：$PID"
+            ss -ntulp | grep realm | grep LISTEN
+        else
+            echo "realm 未运行"
+        fi
     fi
     echo
     read -p "按回车返回菜单..."
