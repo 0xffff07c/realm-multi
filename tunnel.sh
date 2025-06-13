@@ -123,7 +123,7 @@ EOF
     chmod +x $WORKDIR/cgi-bin/ca.cgi
     pkill -f "busybox httpd.*-p 9001" 2>/dev/null || true
     cd $WORKDIR
-    nohup busybox httpd -f -p 9001 -h . -c /cgi-bin > ca_httpd.log 2>&1 &
+    nohup busybox httpd -f -p 9001 -h . -c cgi-bin > ca_httpd.log 2>&1 &
     PUB_IP=$(curl -s --max-time 4 https://api.ipify.org | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     if [ -z "$PUB_IP" ]; then
         PUB_IP=$(hostname -I | awk '{print $1}')
@@ -136,7 +136,7 @@ EOF
 stop_ca_server() {
     pkill -f "busybox httpd.*-p 9001" 2>/dev/null
     RETVAL=$?
-    rm -f $WORKDIR/ca.cgi
+    rm -f $WORKDIR/cgi-bin/ca.cgi
     if [ $RETVAL -eq 0 ]; then
         echo "CA 服务已停止！"
     else
