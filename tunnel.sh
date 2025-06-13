@@ -5,7 +5,7 @@ WORKDIR="/opt/realm"
 mkdir -p $WORKDIR
 cd $WORKDIR
 
-echo -e "\033[36m====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量+Token 拉取证书）======\033[0m"
+echo -e "\033[36m====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量+CA 拉取）======\033[0m"
 echo "项目地址: https://github.com/zhboner/realm"
 echo "免责声明：仅供学习与交流，请勿用于非法用途。"
 echo -e "脚本将在 \033[32m/opt/realm/\033[0m 目录下自动部署和运行。\n"
@@ -14,18 +14,15 @@ sleep 1
 REALM_BIN="/usr/local/bin/realm"
 CONF_FILE="$WORKDIR/realm.json"
 RULES_FILE="$WORKDIR/rules.txt"
-PW_FILE="$WORKDIR/pw.txt"
 ROLE_FILE="$WORKDIR/.realm_role"
-TLS_FLAG="$WORKDIR/.realm_tls"
+INIT_FLAG="$WORKDIR/.realm_inited"
 CERT_FILE="$WORKDIR/cert.pem"
 KEY_FILE="$WORKDIR/key.pem"
 CA_FILE="$WORKDIR/ca.pem"
-INIT_FLAG="$WORKDIR/.realm_inited"
 CA_TOKEN_FILE="$WORKDIR/ca_token.txt"
-CA_SERVER_PID_FILE="$WORKDIR/ca_server.pid"
 
 gen_pw() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16; }
-gen_token() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 24; }
+gen_token() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 32; }
 
 install_realm() {
     echo "[*] 自动下载并安装最新 realm 二进制..."
@@ -57,7 +54,6 @@ install_realm() {
     rm -rf realm-* realm.tar.gz
     wget -O realm.tar.gz "$URL" || { echo "下载失败！"; return 1; }
     tar -xzvf realm.tar.gz || { echo "解压失败！"; return 1; }
-
     BIN=$(tar -tzf realm.tar.gz | grep '^realm$' || echo realm)
     mv -f $BIN /usr/local/bin/realm
     chmod +x /usr/local/bin/realm
@@ -72,66 +68,14 @@ generate_cert() {
     echo "[√] 证书($CERT_FILE)和私钥($KEY_FILE)已生成"
 }
 
-start_ca_server() {
-    if ! [ -f "$CA_TOKEN_FILE" ]; then
-        gen_token > "$CA_TOKEN_FILE"
-    fi
-    # 生成 python ca_server.py
-    cat > "$WORKDIR/ca_server.py" <<EOF
-from flask import Flask, send_file, request, abort
-app = Flask(__name__)
-TOKEN = open("$CA_TOKEN_FILE").read().strip()
-@app.route("/ca.pem")
-def ca():
-    if request.args.get("token") != TOKEN:
-        abort(403)
-    return send_file("$CA_FILE")
-app.run(host="0.0.0.0", port=9001)
-EOF
-    pip3 install flask >/dev/null 2>&1 || python3 -m pip install flask
-    nohup python3 "$WORKDIR/ca_server.py" > "$WORKDIR/ca_server.log" 2>&1 &
-    echo $! > "$CA_SERVER_PID_FILE"
-    echo "[√] CA 证书 HTTP 服务已启动，监听 9001 端口"
-}
-
-stop_ca_server() {
-    if [ -f "$CA_SERVER_PID_FILE" ]; then
-        kill $(cat "$CA_SERVER_PID_FILE") 2>/dev/null || true
-        rm -f "$CA_SERVER_PID_FILE"
-        echo "[*] CA 证书 HTTP 服务已停止"
-    else
-        echo "未检测到 CA 证书服务进程"
-    fi
-    sleep 1
-}
-
-show_ca_token() {
-    echo
-    echo "[证书拉取 Token]: \033[36m$(cat $CA_TOKEN_FILE)\033[0m"
-    CA_IP=$(hostname -I | awk '{print $1}')
-    echo "[curl 拉取命令示例]:"
-    echo "curl \"http://$CA_IP:9001/ca.pem?token=$(cat $CA_TOKEN_FILE)\" -o /opt/realm/ca-出口名.pem"
-    echo "请将上述命令提供给客户端对应规则用户！"
-    echo
-    read -p "按回车返回菜单..."
-}
+is_inited() { [ -f "$INIT_FLAG" ]; }
+detect_role() { [ -f "$ROLE_FILE" ] && cat "$ROLE_FILE" || echo "unknown"; }
 
 init_server() {
     clear
     echo "=== Realm 服务端初始化 ==="
-    read -p "是否启用 TLS 加密？(y/N): " use_tls
-    if [[ "$use_tls" =~ ^[Yy]$ ]]; then
-        echo "tls" > $TLS_FLAG
-        [ -f "$CERT_FILE" ] || generate_cert
-        [ -f "$CA_TOKEN_FILE" ] || gen_token > "$CA_TOKEN_FILE"
-        start_ca_server
-        echo "[*] TLS已启用，证书路径: $CERT_FILE，私钥: $KEY_FILE"
-    else
-        rm -f $TLS_FLAG
-        echo "[*] 未启用TLS，仅用强加密SS隧道"
-    fi
+    echo "[1] 支持 TLS/非TLS，每条规则独立，证书自动生成"
     touch $RULES_FILE
-    touch $PW_FILE
     echo "server" > $ROLE_FILE
     touch $INIT_FLAG
     echo -e "\033[32m服务端基础配置完成，正在自动重启服务...\033[0m"
@@ -143,7 +87,6 @@ init_client() {
     clear
     echo "=== Realm 客户端初始化 ==="
     touch $RULES_FILE
-    touch $PW_FILE
     echo "client" > $ROLE_FILE
     touch $INIT_FLAG
     echo -e "\033[36m客户端基础配置完成，正在自动重启服务...\033[0m"
@@ -151,8 +94,44 @@ init_client() {
     restart_client
 }
 
-is_inited() { [ -f "$INIT_FLAG" ]; }
-detect_role() { [ -f "$ROLE_FILE" ] && cat "$ROLE_FILE" || echo "unknown"; }
+# busybox httpd + bash 实现 CA 拉取服务（Token 校验，无依赖）
+start_ca_server() {
+    if ! command -v busybox >/dev/null 2>&1; then
+        echo "请先安装 busybox: apt install -y busybox"
+        return 1
+    fi
+    [ -f "$CA_TOKEN_FILE" ] || gen_token > "$CA_TOKEN_FILE"
+    CA_TOKEN=$(cat "$CA_TOKEN_FILE")
+    cat > $WORKDIR/ca.cgi <<EOF
+#!/bin/sh
+echo "Content-type: application/x-pem-file"
+echo
+if [ "\$(echo \$QUERY_STRING | grep token=$CA_TOKEN)" ]; then
+  cat $CA_FILE
+else
+  echo "Invalid or missing token"
+fi
+EOF
+    chmod +x $WORKDIR/ca.cgi
+    nohup busybox httpd -f -p 9001 -h $WORKDIR -c '**.cgi' > $WORKDIR/ca_httpd.log 2>&1 &
+    echo "[√] CA 拉取服务已启动 (9001)，Token: $CA_TOKEN"
+    echo "curl \"http://<出口IP>:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
+}
+
+stop_ca_server() {
+    pkill -f "busybox httpd -f -p 9001" && echo "CA 服务已停止" || echo "未检测到 CA 服务"
+    rm -f $WORKDIR/ca.cgi
+    sleep 1
+}
+
+show_ca_token() {
+    [ -f "$CA_TOKEN_FILE" ] || { echo "未生成 CA Token，先启动一次 CA 拉取服务！"; sleep 1; return; }
+    CA_TOKEN=$(cat "$CA_TOKEN_FILE")
+    echo "[*] CA 拉取 Token: $CA_TOKEN"
+    echo "curl \"http://<出口IP>:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
+    echo "请替换 <出口IP> 为你的服务器实际 IP。"
+    read -p "按回车返回菜单..."
+}
 
 add_rule() {
     is_inited || { echo -e "\e[31m请先初始化配置！\e[0m"; sleep 2; return; }
@@ -161,36 +140,41 @@ add_rule() {
     if [[ $role == "server" ]]; then
         read -p "监听端口: " LPORT
         read -p "目标 IP:端口（如 127.0.0.1:8080）: " TARGET
+        read -p "是否为此规则启用 TLS? (y/N): " use_tls
+        if [[ "$use_tls" =~ ^[Yy]$ ]]; then
+            [ -f "$CERT_FILE" ] || generate_cert
+            TLS="true"
+        else
+            TLS="false"
+        fi
         PW=$(gen_pw)
-        echo "$LPORT $TARGET $PW" >> $RULES_FILE
-        echo "已添加: $LPORT --> $TARGET, 密码: $PW"
-        restart_server
+        echo "$LPORT $TARGET $PW $TLS" >> $RULES_FILE
+        echo "已添加: $LPORT --> $TARGET, 密码: $PW, TLS: $TLS"
     else
         read -p "本地监听端口: " LPORT
         read -p "服务端 IP:端口: " RADDR
         read -p "目标 IP:端口: " TARGET
         read -p "服务器密码: " PW
-        read -p "该出口是否启用 TLS？[y/N]: " use_tls
+        read -p "是否启用 TLS? (y/N): " use_tls
         if [[ "$use_tls" =~ ^[Yy]$ ]]; then
-            read -p "请输入证书拉取 token: " CA_TOKEN
-            read -p "请输入出口服务端 IP: " CA_IP
-            CA_DEST="/opt/realm/ca-${LPORT}.pem"
-            # 拉取 CA
-            if curl --connect-timeout 3 -s "http://$CA_IP:9001/ca.pem?token=$CA_TOKEN" -o "$CA_DEST"; then
-                echo "[√] 已自动拉取 CA 证书到 $CA_DEST，将自动启用 TLS"
-                CACERT="$CA_DEST"
-            else
-                echo "[!] 拉取 CA 证书失败，未启用 TLS"
-                CACERT=""
-            fi
+            read -p "请输入出口服务器 CA 拉取 token: " CA_TOKEN
+            read -p "请输入出口服务器 IP: " CA_IP
+            curl "http://$CA_IP:9001/ca.cgi?token=$CA_TOKEN" -o $CA_FILE || { echo "CA 拉取失败，请检查 IP 与 Token！"; return 1; }
+            TLS="true"
         else
-            CACERT=""
+            TLS="false"
         fi
-        echo "$LPORT $RADDR $TARGET $PW $CACERT" >> $RULES_FILE
-        echo "已添加: $LPORT -> $RADDR -> $TARGET (密码: $PW)"
-        restart_client
+        echo "$LPORT $RADDR $TARGET $PW $TLS" >> $RULES_FILE
+        echo "已添加: $LPORT -> $RADDR -> $TARGET (密码: $PW, TLS: $TLS)"
     fi
     sleep 1
+    gen_conf
+    # 自动重启
+    if [[ $role == "server" ]]; then
+        restart_server
+    else
+        restart_client
+    fi
     read -p "按回车返回菜单..."
 }
 
@@ -204,6 +188,8 @@ del_rule() {
         if [[ "$IDX" =~ ^[0-9]+$ ]] && [ "$IDX" -ge 1 ] && [ "$IDX" -le "$(wc -l < $RULES_FILE)" ]; then
             sed -i "${IDX}d" $RULES_FILE
             echo "已删除 #$IDX"
+            sleep 1
+            gen_conf
             role=$(detect_role)
             if [[ $role == "server" ]]; then
                 restart_server
@@ -233,12 +219,9 @@ view_rules() {
 show_server_info() {
     echo -e "\n\033[33m[服务端核心信息]\033[0m"
     if [ -s "$RULES_FILE" ]; then
-        awk '{print "监听端口: " $1 ", 目标: " $2 ", 密码: " $3}' $RULES_FILE
-        if [ -f "$TLS_FLAG" ]; then
+        awk '{print "监听端口: " $1 ", 目标: " $2 ", 密码: " $3 ", TLS: " $4}' $RULES_FILE
+        if [ -f "$CERT_FILE" ]; then
             echo "TLS 证书: $CERT_FILE"
-            show_ca_token
-        else
-            echo "未启用TLS"
         fi
     else
         echo "无规则"
@@ -275,20 +258,15 @@ client_status() {
 
 gen_conf() {
     ROLE=$(detect_role)
-    TLS_ON=false
-    if [ -f "$TLS_FLAG" ]; then
-        TLS_ON=true
-    fi
-
     echo '{ "log": { "level": "info", "output": "stdout" }, "endpoints": [' > $CONF_FILE
     COUNT=$(wc -l < $RULES_FILE)
     IDX=1
 
     if [ "$ROLE" = "server" ]; then
-        while read LPORT TARGET PW; do
+        while read LPORT TARGET PW TLS; do
             SEP=","
             [ "$IDX" = "$COUNT" ] && SEP=""
-            if $TLS_ON; then
+            if [ "$TLS" = "true" ]; then
                 cat >> $CONF_FILE <<EOF
   {
     "listen": "0.0.0.0:$LPORT",
@@ -324,10 +302,10 @@ EOF
             IDX=$((IDX+1))
         done < $RULES_FILE
     else
-        while read LPORT RADDR TARGET PW CACERT; do
+        while read LPORT RADDR TARGET PW TLS; do
             SEP=","
             [ "$IDX" = "$COUNT" ] && SEP=""
-            if [ -n "$CACERT" ]; then
+            if [ "$TLS" = "true" ]; then
                 cat >> $CONF_FILE <<EOF
   {
     "listen": "0.0.0.0:$LPORT",
@@ -335,7 +313,7 @@ EOF
     "tls": {
       "enabled": true,
       "insecure": false,
-      "ca": "$CACERT"
+      "ca": "$CA_FILE"
     },
     "transport": "quic",
     "udp": true,
@@ -394,7 +372,6 @@ log_client() { tail -n 50 $WORKDIR/realm-client.log || echo "无日志"; read -p
 
 uninstall_realm() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
-    stop_ca_server
     rm -rf $WORKDIR $REALM_BIN
     echo "[√] realm 相关文件和配置均已彻底删除。"
     read -p "按回车返回..."
@@ -417,7 +394,7 @@ select_role() {
 server_menu() {
     while true; do
         clear
-        echo -e "\033[32m==== Nuro · Realm(隧道) 服务端菜单 ====\033[0m"
+        echo -e "\033[32m==== Nuro · Realm(加密隧道) 服务端菜单 ====\033[0m"
         echo "1) 一键安装/升级 realm"
         echo "2) 初始化配置并启动"
         echo "3) 添加端口转发规则"
@@ -428,10 +405,10 @@ server_menu() {
         echo "8) 查看服务端日志"
         echo "9) 查看当前转发规则与密码"
         echo "10) 查看当前运行状态"
-        echo "11) 卸载 realm"
-        echo "12) 查看证书拉取 Token/命令"
-        echo "13) 重启 CA 证书服务"
-        echo "14) 停止 CA 证书服务"
+        echo "11) 启动 CA 拉取服务"
+        echo "12) 停止 CA 拉取服务"
+        echo "13) 查看/复制 CA 拉取 Token"
+        echo "14) 卸载 realm"
         echo "0) 退出"
         echo "-----------------------------"
         read -p "请选择 [0-14]: " choice
@@ -446,10 +423,10 @@ server_menu() {
             8) log_server ;;
             9) show_server_info ;;
             10) server_status ;;
-            11) uninstall_realm ;;
-            12) show_ca_token ;;
-            13) stop_ca_server; start_ca_server ;;
-            14) stop_ca_server ;;
+            11) start_ca_server ;;
+            12) stop_ca_server ;;
+            13) show_ca_token ;;
+            14) uninstall_realm ;;
             0) exit 0 ;;
             *) echo "无效选择，重新输入！" && sleep 1 ;;
         esac
@@ -459,7 +436,7 @@ server_menu() {
 client_menu() {
     while true; do
         clear
-        echo -e "\033[36m==== Nuro · Realm(隧道) 客户端菜单 ====\033[0m"
+        echo -e "\033[36m==== Nuro · Realm(加密隧道) 客户端菜单 ====\033[0m"
         echo "1) 一键安装/升级 realm"
         echo "2) 初始化配置并启动"
         echo "3) 添加端口转发规则"
