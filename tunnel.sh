@@ -96,7 +96,13 @@ init_client() {
 
 # busybox httpd + bash 实现 CA 拉取服务（Token 校验，无依赖）
 start_ca_server() {
-    # 自动安装 busybox（仅Debian/Ubuntu系，其他系统可扩展判断）
+    # 检查 CA 证书文件
+    if [ ! -f "$CA_FILE" ] || [ ! -s "$CA_FILE" ]; then
+        echo "未检测到 CA 证书($CA_FILE)，请先启用 TLS 并生成证书！"
+        sleep 1
+        return
+    fi
+    # 自动安装 busybox
     if ! command -v busybox >/dev/null 2>&1; then
         apt update -y >/dev/null 2>&1
         apt install -y busybox >/dev/null 2>&1
@@ -114,10 +120,8 @@ else
 fi
 EOF
     chmod +x $WORKDIR/ca.cgi
-    # 杀掉已存在的 httpd
     pkill -f "busybox httpd.*-p 9001" 2>/dev/null || true
     nohup busybox httpd -f -p 9001 -h $WORKDIR -c '**.cgi' > $WORKDIR/ca_httpd.log 2>&1 &
-    # 获取公网IP，失败取本地IP
     PUB_IP=$(curl -s --max-time 4 https://api-ipv4.ip.sb/ip || hostname -I | awk '{print $1}')
     echo "[√] CA 拉取服务已启动 (9001)，Token: $CA_TOKEN"
     echo "curl \"http://$PUB_IP:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
@@ -132,9 +136,13 @@ stop_ca_server() {
 }
 
 show_ca_token() {
+    if [ ! -f "$CA_FILE" ] || [ ! -s "$CA_FILE" ]; then
+        echo "未检测到 CA 证书($CA_FILE)，请先启用 TLS 并生成证书！"
+        sleep 1
+        return
+    fi
     [ -f "$CA_TOKEN_FILE" ] || { echo "未生成 CA Token，先启动一次 CA 拉取服务！"; sleep 1; return; }
     CA_TOKEN=$(cat "$CA_TOKEN_FILE")
-    # 获取公网 IP（失败则用本地 IP）
     PUB_IP=$(curl -s --max-time 4 https://api-ipv4.ip.sb/ip || hostname -I | awk '{print $1}')
     echo "[*] CA 拉取 Token: $CA_TOKEN"
     echo "[*] CA 拉取命令："
