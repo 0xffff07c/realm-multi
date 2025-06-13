@@ -96,9 +96,10 @@ init_client() {
 
 # busybox httpd + bash 实现 CA 拉取服务（Token 校验，无依赖）
 start_ca_server() {
+    # 自动安装 busybox（仅Debian/Ubuntu系，其他系统可扩展判断）
     if ! command -v busybox >/dev/null 2>&1; then
-        echo "请先安装 busybox: apt install -y busybox"
-        return 1
+        apt update -y >/dev/null 2>&1
+        apt install -y busybox >/dev/null 2>&1
     fi
     [ -f "$CA_TOKEN_FILE" ] || gen_token > "$CA_TOKEN_FILE"
     CA_TOKEN=$(cat "$CA_TOKEN_FILE")
@@ -113,23 +114,31 @@ else
 fi
 EOF
     chmod +x $WORKDIR/ca.cgi
+    # 杀掉已存在的 httpd
+    pkill -f "busybox httpd.*-p 9001" 2>/dev/null || true
     nohup busybox httpd -f -p 9001 -h $WORKDIR -c '**.cgi' > $WORKDIR/ca_httpd.log 2>&1 &
+    # 获取公网IP，失败取本地IP
+    PUB_IP=$(curl -s --max-time 4 https://api-ipv4.ip.sb/ip || hostname -I | awk '{print $1}')
     echo "[√] CA 拉取服务已启动 (9001)，Token: $CA_TOKEN"
-    echo "curl \"http://<出口IP>:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
+    echo "curl \"http://$PUB_IP:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
+    read -p "按回车返回菜单..."
 }
 
 stop_ca_server() {
     pkill -f "busybox httpd -f -p 9001" && echo "CA 服务已停止" || echo "未检测到 CA 服务"
     rm -f $WORKDIR/ca.cgi
-    sleep 1
+    echo "停止成功！"
+    read -p "按回车返回菜单..."
 }
 
 show_ca_token() {
     [ -f "$CA_TOKEN_FILE" ] || { echo "未生成 CA Token，先启动一次 CA 拉取服务！"; sleep 1; return; }
     CA_TOKEN=$(cat "$CA_TOKEN_FILE")
+    # 获取公网 IP（失败则用本地 IP）
+    PUB_IP=$(curl -s --max-time 4 https://api-ipv4.ip.sb/ip || hostname -I | awk '{print $1}')
     echo "[*] CA 拉取 Token: $CA_TOKEN"
-    echo "curl \"http://<出口IP>:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
-    echo "请替换 <出口IP> 为你的服务器实际 IP。"
+    echo "[*] CA 拉取命令："
+    echo "curl \"http://$PUB_IP:9001/ca.cgi?token=$CA_TOKEN\" -o ca.pem"
     read -p "按回车返回菜单..."
 }
 
@@ -381,8 +390,8 @@ select_role() {
     clear
     echo -e "\033[33m[未检测到已初始化的 realm 服务端或客户端]\033[0m"
     echo "请选择本机角色："
-    echo "1) realm 服务端 (出口/国外)"
-    echo "2) realm 客户端 (入口/国内)"
+    echo "1) realm 服务端 (出口)"
+    echo "2) realm 客户端 (入口)"
     read -p "输入 1 或 2 并回车: " role
     case $role in
         1) echo "server" > $ROLE_FILE ;;
@@ -394,7 +403,7 @@ select_role() {
 server_menu() {
     while true; do
         clear
-        echo -e "\033[32m==== Nuro · Realm(加密隧道) 服务端菜单 ====\033[0m"
+        echo -e "\033[32m==== Nuro · Realm(隧道) 服务端菜单 ====\033[0m"
         echo "1) 一键安装/升级 realm"
         echo "2) 初始化配置并启动"
         echo "3) 添加端口转发规则"
@@ -436,7 +445,7 @@ server_menu() {
 client_menu() {
     while true; do
         clear
-        echo -e "\033[36m==== Nuro · Realm(加密隧道) 客户端菜单 ====\033[0m"
+        echo -e "\033[36m==== Nuro · Realm(隧道) 客户端菜单 ====\033[0m"
         echo "1) 一键安装/升级 realm"
         echo "2) 初始化配置并启动"
         echo "3) 添加端口转发规则"
