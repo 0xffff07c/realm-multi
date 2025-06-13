@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 WORKDIR="/opt/realm"
@@ -20,51 +20,13 @@ TLS_FLAG="$WORKDIR/.realm_tls"
 CERT_FILE="$WORKDIR/cert.pem"
 KEY_FILE="$WORKDIR/key.pem"
 CA_FILE="$WORKDIR/ca.pem"
-INIT_FLAG="$WORKDIR/.realm_inited"
 CA_TOKEN_FILE="$WORKDIR/ca_token.txt"
 CA_SERVER_PID_FILE="$WORKDIR/ca_server.pid"
+HTPASSWD="$WORKDIR/.htpasswd"
+INIT_FLAG="$WORKDIR/.realm_inited"
 
 gen_pw() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16; }
 gen_token() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 24; }
-
-install_realm() {
-    echo "[*] 自动下载并安装最新 realm 二进制..."
-
-    arch=$(uname -m)
-    case "$arch" in
-        x86_64|amd64)
-            PKG="realm-x86_64-unknown-linux-gnu.tar.gz"
-            ;;
-        aarch64|arm64)
-            PKG="realm-aarch64-unknown-linux-gnu.tar.gz"
-            ;;
-        *)
-            echo "暂不支持该架构: $arch"
-            return 1
-            ;;
-    esac
-
-    VERSION=$(curl -s https://api.github.com/repos/zhboner/realm/releases/latest | grep tag_name | cut -d '"' -f4)
-    if [ -z "$VERSION" ]; then
-        echo "无法获取 realm 最新版本号，网络或 Github API 问题。"
-        return 1
-    fi
-
-    URL="https://github.com/zhboner/realm/releases/download/$VERSION/$PKG"
-    echo "[*] 下载地址: $URL"
-
-    cd /tmp
-    rm -rf realm-* realm.tar.gz
-    wget -O realm.tar.gz "$URL" || { echo "下载失败！"; return 1; }
-    tar -xzvf realm.tar.gz || { echo "解压失败！"; return 1; }
-
-    BIN=$(tar -tzf realm.tar.gz | grep '^realm$' || echo realm)
-    mv -f $BIN /usr/local/bin/realm
-    chmod +x /usr/local/bin/realm
-
-    echo "[√] realm ($VERSION) 已安装/升级到 /usr/local/bin/realm"
-    read -p "按回车返回菜单..."
-}
 
 generate_cert() {
     openssl req -x509 -newkey rsa:2048 -keyout $KEY_FILE -out $CERT_FILE -days 3650 -nodes -subj "/CN=realm"
@@ -76,20 +38,9 @@ start_ca_server() {
     if ! [ -f "$CA_TOKEN_FILE" ]; then
         gen_token > "$CA_TOKEN_FILE"
     fi
-    # 生成 python ca_server.py
-    cat > "$WORKDIR/ca_server.py" <<EOF
-from flask import Flask, send_file, request, abort
-app = Flask(__name__)
-TOKEN = open("$CA_TOKEN_FILE").read().strip()
-@app.route("/ca.pem")
-def ca():
-    if request.args.get("token") != TOKEN:
-        abort(403)
-    return send_file("$CA_FILE")
-app.run(host="0.0.0.0", port=9001)
-EOF
-    pip3 install flask >/dev/null 2>&1 || python3 -m pip install flask
-    nohup python3 "$WORKDIR/ca_server.py" > "$WORKDIR/ca_server.log" 2>&1 &
+    TOKEN=$(cat "$CA_TOKEN_FILE")
+    echo "user:$(openssl passwd -apr1 "$TOKEN")" > "$HTPASSWD"
+    nohup busybox httpd -f -p 9001 -h "$WORKDIR" -r realm-ca > "$WORKDIR/ca_server.log" 2>&1 &
     echo $! > "$CA_SERVER_PID_FILE"
     echo "[√] CA 证书 HTTP 服务已启动，监听 9001 端口"
 }
@@ -110,7 +61,7 @@ show_ca_token() {
     echo "[证书拉取 Token]: \033[36m$(cat $CA_TOKEN_FILE)\033[0m"
     CA_IP=$(hostname -I | awk '{print $1}')
     echo "[curl 拉取命令示例]:"
-    echo "curl \"http://$CA_IP:9001/ca.pem?token=$(cat $CA_TOKEN_FILE)\" -o /opt/realm/ca-出口名.pem"
+    echo "curl -u user:$(cat $CA_TOKEN_FILE) http://$CA_IP:9001/ca.pem -o /opt/realm/ca-出口名.pem"
     echo "请将上述命令提供给客户端对应规则用户！"
     echo
     read -p "按回车返回菜单..."
@@ -120,6 +71,8 @@ init_server() {
     clear
     echo "=== Realm 服务端初始化 ==="
     read -p "是否启用 TLS 加密？(y/N): " use_tls
+    mkdir -p "$WORKDIR"
+    touch "$RULES_FILE" "$PW_FILE"
     if [[ "$use_tls" =~ ^[Yy]$ ]]; then
         echo "tls" > $TLS_FLAG
         [ -f "$CERT_FILE" ] || generate_cert
@@ -130,8 +83,6 @@ init_server() {
         rm -f $TLS_FLAG
         echo "[*] 未启用TLS，仅用强加密SS隧道"
     fi
-    touch $RULES_FILE
-    touch $PW_FILE
     echo "server" > $ROLE_FILE
     touch $INIT_FLAG
     echo -e "\033[32m服务端基础配置完成，正在自动重启服务...\033[0m"
@@ -142,15 +93,14 @@ init_server() {
 init_client() {
     clear
     echo "=== Realm 客户端初始化 ==="
-    touch $RULES_FILE
-    touch $PW_FILE
+    mkdir -p "$WORKDIR"
+    touch "$RULES_FILE" "$PW_FILE"
     echo "client" > $ROLE_FILE
     touch $INIT_FLAG
     echo -e "\033[36m客户端基础配置完成，正在自动重启服务...\033[0m"
     read -p "按回车继续启动 realm..."
     restart_client
 }
-
 is_inited() { [ -f "$INIT_FLAG" ]; }
 detect_role() { [ -f "$ROLE_FILE" ] && cat "$ROLE_FILE" || echo "unknown"; }
 
@@ -175,8 +125,7 @@ add_rule() {
             read -p "请输入证书拉取 token: " CA_TOKEN
             read -p "请输入出口服务端 IP: " CA_IP
             CA_DEST="/opt/realm/ca-${LPORT}.pem"
-            # 拉取 CA
-            if curl --connect-timeout 3 -s "http://$CA_IP:9001/ca.pem?token=$CA_TOKEN" -o "$CA_DEST"; then
+            if curl -u user:$CA_TOKEN http://$CA_IP:9001/ca.pem -o "$CA_DEST"; then
                 echo "[√] 已自动拉取 CA 证书到 $CA_DEST，将自动启用 TLS"
                 CACERT="$CA_DEST"
             else
@@ -230,55 +179,10 @@ view_rules() {
     read -p "按回车返回菜单..." _
 }
 
-show_server_info() {
-    echo -e "\n\033[33m[服务端核心信息]\033[0m"
-    if [ -s "$RULES_FILE" ]; then
-        awk '{print "监听端口: " $1 ", 目标: " $2 ", 密码: " $3}' $RULES_FILE
-        if [ -f "$TLS_FLAG" ]; then
-            echo "TLS 证书: $CERT_FILE"
-            show_ca_token
-        else
-            echo "未启用TLS"
-        fi
-    else
-        echo "无规则"
-    fi
-    echo
-    read -p "按回车返回菜单..."
-}
-
-server_status() {
-    echo -e "\n\033[32m[服务端进程状态]\033[0m"
-    PID=$(pgrep -f "realm.*-c $CONF_FILE")
-    if [ -n "$PID" ]; then
-        echo "realm 已运行，进程ID：$PID"
-        ss -ntulp | grep realm | grep LISTEN
-    else
-        echo "realm 未运行"
-    fi
-    echo
-    read -p "按回车返回菜单..."
-}
-
-client_status() {
-    echo -e "\n\033[32m[客户端进程状态]\033[0m"
-    PID=$(pgrep -f "realm.*-c $CONF_FILE")
-    if [ -n "$PID" ]; then
-        echo "realm 已运行，进程ID：$PID"
-        ss -ntulp | grep realm | grep LISTEN
-    else
-        echo "realm 未运行"
-    fi
-    echo
-    read -p "按回车返回菜单..."
-}
-
 gen_conf() {
     ROLE=$(detect_role)
     TLS_ON=false
-    if [ -f "$TLS_FLAG" ]; then
-        TLS_ON=true
-    fi
+    [ -f "$TLS_FLAG" ] && TLS_ON=true
 
     echo '{ "log": { "level": "info", "output": "stdout" }, "endpoints": [' > $CONF_FILE
     COUNT=$(wc -l < $RULES_FILE)
@@ -365,7 +269,6 @@ EOF
             IDX=$((IDX+1))
         done < $RULES_FILE
     fi
-
     echo ']}' >> $CONF_FILE
     echo "配置已同步: $CONF_FILE"
     sleep 1
@@ -392,6 +295,32 @@ stop_client() { pkill -f "$REALM_BIN.*-c $CONF_FILE" && echo "客户端已停止
 log_server() { tail -n 50 $WORKDIR/realm-server.log || echo "无日志"; read -p "回车返回..."; }
 log_client() { tail -n 50 $WORKDIR/realm-client.log || echo "无日志"; read -p "回车返回..."; }
 
+server_status() {
+    echo -e "\n\033[32m[服务端进程状态]\033[0m"
+    PID=$(pgrep -f "realm.*-c $CONF_FILE")
+    if [ -n "$PID" ]; then
+        echo "realm 已运行，进程ID：$PID"
+        ss -ntulp | grep realm | grep LISTEN
+    else
+        echo "realm 未运行"
+    fi
+    echo
+    read -p "按回车返回菜单..."
+}
+
+client_status() {
+    echo -e "\n\033[32m[客户端进程状态]\033[0m"
+    PID=$(pgrep -f "realm.*-c $CONF_FILE")
+    if [ -n "$PID" ]; then
+        echo "realm 已运行，进程ID：$PID"
+        ss -ntulp | grep realm | grep LISTEN
+    else
+        echo "realm 未运行"
+    fi
+    echo
+    read -p "按回车返回菜单..."
+}
+
 uninstall_realm() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
     stop_ca_server
@@ -413,7 +342,6 @@ select_role() {
         *) echo "输入无效，退出"; exit 1 ;;
     esac
 }
-
 server_menu() {
     while true; do
         clear
@@ -444,7 +372,7 @@ server_menu() {
             6) restart_server ;;
             7) stop_server ;;
             8) log_server ;;
-            9) show_server_info ;;
+            9) show_ca_token ;;
             10) server_status ;;
             11) uninstall_realm ;;
             12) show_ca_token ;;
