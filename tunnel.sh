@@ -25,21 +25,45 @@ INIT_FLAG="$WORKDIR/.realm_inited"
 gen_pw() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16; }
 
 install_realm() {
-    echo "[*] 自动下载最新 realm 二进制..."
+    echo "[*] 自动下载并安装最新 realm 二进制..."
+
     arch=$(uname -m)
-    if [[ $arch == "x86_64" ]]; then
-        DL_URL="https://github.com/zhboner/realm/releases/latest/download/realm-x86_64-unknown-linux-gnu"
-    elif [[ $arch == "aarch64" ]]; then
-        DL_URL="https://github.com/zhboner/realm/releases/latest/download/realm-aarch64-unknown-linux-gnu"
-    else
-        echo "暂不支持该架构: $arch"
-        return
+    case "$arch" in
+        x86_64|amd64)
+            PKG="realm-x86_64-unknown-linux-gnu.tar.gz"
+            ;;
+        aarch64|arm64)
+            PKG="realm-aarch64-unknown-linux-gnu.tar.gz"
+            ;;
+        *)
+            echo "暂不支持该架构: $arch"
+            return 1
+            ;;
+    esac
+
+    # 获取最新版本号
+    VERSION=$(curl -s https://api.github.com/repos/zhboner/realm/releases/latest | grep tag_name | cut -d '"' -f4)
+    if [ -z "$VERSION" ]; then
+        echo "无法获取 realm 最新版本号，网络或 Github API 问题。"
+        return 1
     fi
-    wget -O $REALM_BIN $DL_URL
-    chmod +x $REALM_BIN
-    echo "[√] realm 已安装/升级！"
+
+    URL="https://github.com/zhboner/realm/releases/download/$VERSION/$PKG"
+    echo "[*] 下载地址: $URL"
+
+    cd /tmp
+    rm -rf realm-* realm.tar.gz
+    wget -O realm.tar.gz "$URL" || { echo "下载失败！"; return 1; }
+    tar -xzvf realm.tar.gz || { echo "解压失败！"; return 1; }
+
+    BIN=$(tar -tzf realm.tar.gz | grep '^realm$' || echo realm)
+    mv -f $BIN /usr/local/bin/realm
+    chmod +x /usr/local/bin/realm
+
+    echo "[√] realm ($VERSION) 已安装/升级到 /usr/local/bin/realm"
     read -p "按回车返回菜单..."
 }
+
 
 generate_cert() {
     openssl req -x509 -newkey rsa:2048 -keyout $KEY_FILE -out $CERT_FILE -days 3650 -nodes -subj "/CN=realm"
