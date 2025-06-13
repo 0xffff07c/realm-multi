@@ -21,7 +21,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/nuro-hia/realm/main/tunnel.s
 
 ## 二、转发原理说明
 
-**推荐模式（多出口）：**  
+**举例模式（多出口）：**  
 每台“出口服务器”转发到一个“落地节点”，多个出口可分别批量转发，不同客户端对接不同出口即可实现多出口负载。
 
 ```
@@ -31,6 +31,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/nuro-hia/realm/main/tunnel.s
                              |
                              |... (可继续扩展)
 ```
+也可以多入口、多出口、多落地
 
 **端口管理建议：**  
 - 建议所有节点监听端口、目标端口、落地端口**一致**，如均用 `27567`，方便批量管理。
