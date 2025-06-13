@@ -190,8 +190,9 @@ show_server_info() {
 
 server_status() {
     echo -e "\n\033[32m[服务端进程状态]\033[0m"
-    if pgrep -f "$REALM_BIN.*-c $CONF_FILE" > /dev/null; then
-        echo "realm 已运行，进程ID：$(pgrep -f "$REALM_BIN.*-c $CONF_FILE")"
+    PID=$(pgrep -f "realm.*-c $CONF_FILE")
+    if [ -n "$PID" ]; then
+        echo "realm 已运行，进程ID：$PID"
         ss -ntulp | grep realm | grep LISTEN
     else
         echo "realm 未运行"
@@ -202,8 +203,10 @@ server_status() {
 
 client_status() {
     echo -e "\n\033[32m[客户端进程状态]\033[0m"
-    if pgrep -f "$REALM_BIN.*-c $CONF_FILE" > /dev/null; then
-        echo "realm 已运行，进程ID：$(pgrep -f "$REALM_BIN.*-c $CONF_FILE")"
+    # 更宽松检测：无论路径如何都能查到
+    PID=$(pgrep -f "realm.*-c $CONF_FILE")
+    if [ -n "$PID" ]; then
+        echo "realm 已运行，进程ID：$PID"
         ss -ntulp | grep realm | grep LISTEN
     else
         echo "realm 未运行"
@@ -211,6 +214,7 @@ client_status() {
     echo
     read -p "按回车返回菜单..."
 }
+
 
 gen_conf() {
     ROLE=$(detect_role)
