@@ -419,7 +419,7 @@ uninstall_realm() {
     pkill -f "$REALM_BIN.*-c $CONF_FILE" || true
     rm -rf $WORKDIR $REALM_BIN
     echo "[√] realm 相关文件和配置均已彻底删除。"
-    read -p "按回车返回..."
+    exit 0
 }
 
 select_role() {
