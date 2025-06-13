@@ -121,9 +121,8 @@ fi
 EOF
     chmod +x $WORKDIR/ca.cgi
     pkill -f "busybox httpd.*-p 9001" 2>/dev/null || true
-    # 必须保证 -h 目录和 .cgi 一致，-c 参数为 .cgi
     cd $WORKDIR
-    nohup busybox httpd -f -p 9001 -h . -c .cgi > ca_httpd.log 2>&1 &
+    nohup busybox httpd -f -p 9001 -h . -c / > ca_httpd.log 2>&1 &
     PUB_IP=$(curl -s --max-time 4 https://api.ipify.org | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
     if [ -z "$PUB_IP" ]; then
         PUB_IP=$(hostname -I | awk '{print $1}')
