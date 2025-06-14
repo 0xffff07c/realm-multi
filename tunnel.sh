@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-# ====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量+CA 拉取）======
+# ====== Nuro REALM 高性能加密隧道一键管理脚本（支持 TLS 批量+CA 拉取 协议自选）======
 # 项目地址: https://github.com/zhboner/realm
 # 免责声明：仅供学习与交流，请勿用于非法用途。
 # 脚本将在 /opt/realm/ 目录下自动部署和运行。
@@ -163,6 +163,18 @@ add_rule() {
     is_inited || { echo -e "\e[31m请先初始化配置！\e[0m"; sleep 2; return; }
     role=$(detect_role)
     echo "=== 添加端口转发规则 ==="
+
+    echo "请选择传输协议："
+    echo "1) tcp"
+    echo "2) quic"
+    echo "3) ws"
+    read -p "输入 1-3 选择协议（默认 quic）: " proto_choice
+    case "$proto_choice" in
+        1) TRANSPORT="tcp" ;;
+        3) TRANSPORT="ws" ;;
+        *) TRANSPORT="quic" ;;
+    esac
+
     if [[ $role == "server" ]]; then
         read -p "监听端口: " LPORT
         read -p "目标 IP:端口（如 127.0.0.1:8080）: " TARGET
@@ -174,8 +186,8 @@ add_rule() {
             TLS="false"
         fi
         PW=$(gen_pw)
-        echo "$LPORT $TARGET $PW $TLS" >> $RULES_FILE
-        echo "已添加: $LPORT --> $TARGET, 密码: $PW, TLS: $TLS"
+        echo "$LPORT $TARGET $PW $TLS $TRANSPORT" >> $RULES_FILE
+        echo "已添加: $LPORT --> $TARGET, 密码: $PW, TLS: $TLS, 协议: $TRANSPORT"
     else
         read -p "本地监听端口: " LPORT
         read -p "服务端 IP:端口: " RADDR
@@ -183,7 +195,6 @@ add_rule() {
         read -p "服务器密码: " PW
         read -p "是否启用 TLS? (y/N): " use_tls
         if [[ "$use_tls" =~ ^[Yy]$ ]]; then
-            # 自动从RADDR提取IP
             S_IP=$(echo "$RADDR" | cut -d: -f1)
             CA_FILENAME="ca-${S_IP}.pem"
             echo "请粘贴服务端生成的 curl 命令（整条粘贴即可回车）："
@@ -199,12 +210,13 @@ add_rule() {
             TLS="false"
             CA_FILENAME=""
         fi
-        echo "$LPORT $RADDR $TARGET $PW $TLS $CA_FILENAME" >> $RULES_FILE
-        echo "已添加: $LPORT -> $RADDR -> $TARGET (密码: $PW, TLS: $TLS, CA: $CA_FILENAME)"
+        echo "$LPORT $RADDR $TARGET $PW $TLS $CA_FILENAME $TRANSPORT" >> $RULES_FILE
+        echo "已添加: $LPORT -> $RADDR -> $TARGET (密码: $PW, TLS: $TLS, 协议: $TRANSPORT)"
+        echo "⚠️ 请确保服务端使用相同的传输协议（$TRANSPORT）"
     fi
+
     sleep 1
     gen_conf
-    # 自动重启
     if [[ $role == "server" ]]; then
         restart_server
     else
@@ -216,17 +228,34 @@ add_rule() {
 del_rule() {
     is_inited || { echo -e "\e[31m请先初始化配置！\e[0m"; sleep 2; return; }
     [ ! -s "$RULES_FILE" ] && { echo "没有可删除的规则！"; sleep 1; read -p "按回车返回菜单..."; return; }
-    echo "当前端口转发规则："
-    nl -w2 $RULES_FILE
+
+    echo -e "\n当前端口转发规则："
+    line_num=1
+    role=$(detect_role)
+
+    if [[ "$role" == "server" ]]; then
+        while read -r LPORT TARGET PW TLS TRANSPORT; do
+            [ -z "$TRANSPORT" ] && TRANSPORT="quic"
+            echo "#$line_num 监听端口: $LPORT, 目标: $TARGET, 密码: $PW, TLS: $TLS, 协议: $TRANSPORT"
+            line_num=$((line_num + 1))
+        done < "$RULES_FILE"
+    else
+        while read -r LPORT RADDR TARGET PW TLS CA_FILENAME TRANSPORT; do
+            [ -z "$TRANSPORT" ] && TRANSPORT="quic"
+            echo "#$line_num 本地监听: $LPORT, 服务端: $RADDR, 目标: $TARGET, 密码: $PW, TLS: $TLS, 协议: $TRANSPORT"
+            line_num=$((line_num + 1))
+        done < "$RULES_FILE"
+    fi
+
+    echo
     while true; do
         read -p "输入要删除的序号: " IDX
-        if [[ "$IDX" =~ ^[0-9]+$ ]] && [ "$IDX" -ge 1 ] && [ "$IDX" -le "$(wc -l < $RULES_FILE)" ]; then
-            sed -i "${IDX}d" $RULES_FILE
+        if [[ "$IDX" =~ ^[0-9]+$ ]] && [ "$IDX" -ge 1 ] && [ "$IDX" -le "$(wc -l < "$RULES_FILE")" ]; then
+            sed -i "${IDX}d" "$RULES_FILE"
             echo "已删除 #$IDX"
             sleep 1
             gen_conf
-            role=$(detect_role)
-            if [[ $role == "server" ]]; then
+            if [[ "$role" == "server" ]]; then
                 restart_server
             else
                 restart_client
@@ -241,20 +270,41 @@ del_rule() {
 
 view_rules() {
     is_inited || { echo -e "\e[31m请先初始化配置！\e[0m"; sleep 2; return; }
-    echo -e "\n[当前端口规则]"
-    if [ -s "$RULES_FILE" ]; then
-        nl -w2 $RULES_FILE
-    else
+    echo -e "\n\033[36m[当前端口转发规则]\033[0m"
+    if [ ! -s "$RULES_FILE" ]; then
         echo "无转发规则"
+    else
+        role=$(detect_role)
+        line_num=1
+        if [[ "$role" == "server" ]]; then
+            while read -r LPORT TARGET PW TLS TRANSPORT; do
+                [ -z "$TRANSPORT" ] && TRANSPORT="quic"
+                echo "#$line_num 监听端口: $LPORT, 目标: $TARGET, 密码: $PW, TLS: $TLS, 协议: $TRANSPORT"
+                line_num=$((line_num + 1))
+            done < "$RULES_FILE"
+        else
+            while read -r LPORT RADDR TARGET PW TLS CA_FILENAME TRANSPORT; do
+                [ -z "$TRANSPORT" ] && TRANSPORT="quic"
+                echo "#$line_num 本地监听: $LPORT, 服务端: $RADDR, 目标: $TARGET, 密码: $PW, TLS: $TLS, 协议: $TRANSPORT"
+                line_num=$((line_num + 1))
+            done < "$RULES_FILE"
+        fi
     fi
     echo
     read -p "按回车返回菜单..." _
 }
 
+
 show_server_info() {
     echo -e "\n\033[33m[服务端核心信息]\033[0m"
     if [ -s "$RULES_FILE" ]; then
-        awk '{print "监听端口: " $1 ", 目标: " $2 ", 密码: " $3 ", TLS: " $4}' $RULES_FILE
+        line_num=1
+        while read -r LPORT TARGET PW TLS TRANSPORT; do
+            [ -z "$TRANSPORT" ] && TRANSPORT="quic"
+            echo "#$line_num 监听端口: $LPORT, 目标: $TARGET, 密码: $PW, TLS: $TLS, 协议: $TRANSPORT"
+            line_num=$((line_num + 1))
+        done < "$RULES_FILE"
+
         if [ -f "$CERT_FILE" ]; then
             echo "TLS 证书: $CERT_FILE"
         fi
@@ -264,6 +314,7 @@ show_server_info() {
     echo
     read -p "按回车返回菜单..."
 }
+
 
 server_status() {
     echo -e "\n\033[32m[服务端进程状态]\033[0m"
@@ -306,9 +357,9 @@ gen_conf() {
     IDX=1
 
     if [ "$ROLE" = "server" ]; then
-        while read LPORT TARGET PW TLS _; do
-            SEP=","
-            [ "$IDX" = "$COUNT" ] && SEP=""
+        while read -r LPORT TARGET PW TLS TRANSPORT; do
+            [ -z "$TRANSPORT" ] && TRANSPORT="quic"
+            SEP=","; [ "$IDX" = "$COUNT" ] && SEP=""
             if [ "$TLS" = "true" ]; then
                 cat >> $CONF_FILE <<EOF
   {
@@ -319,7 +370,7 @@ gen_conf() {
       "certificate": "$CERT_FILE",
       "key": "$KEY_FILE"
     },
-    "transport": "quic",
+    "transport": "$TRANSPORT",
     "udp": true,
     "protocol": "shadowsocks",
     "method": "aes-256-gcm",
@@ -334,7 +385,7 @@ EOF
     "tls": {
       "enabled": false
     },
-    "transport": "quic",
+    "transport": "$TRANSPORT",
     "udp": true,
     "protocol": "shadowsocks",
     "method": "aes-256-gcm",
@@ -345,9 +396,9 @@ EOF
             IDX=$((IDX+1))
         done < $RULES_FILE
     else
-        while read LPORT RADDR TARGET PW TLS CA_FILENAME; do
-            SEP=","
-            [ "$IDX" = "$COUNT" ] && SEP=""
+        while read -r LPORT RADDR TARGET PW TLS CA_FILENAME TRANSPORT; do
+            [ -z "$TRANSPORT" ] && TRANSPORT="quic"
+            SEP=","; [ "$IDX" = "$COUNT" ] && SEP=""
             if [ "$TLS" = "true" ]; then
                 cat >> $CONF_FILE <<EOF
   {
@@ -358,7 +409,7 @@ EOF
       "insecure": false,
       "ca": "$WORKDIR/$CA_FILENAME"
     },
-    "transport": "quic",
+    "transport": "$TRANSPORT",
     "udp": true,
     "protocol": "shadowsocks",
     "method": "aes-256-gcm",
@@ -374,7 +425,7 @@ EOF
     "tls": {
       "enabled": false
     },
-    "transport": "quic",
+    "transport": "$TRANSPORT",
     "udp": true,
     "protocol": "shadowsocks",
     "method": "aes-256-gcm",
