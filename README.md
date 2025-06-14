@@ -52,6 +52,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/nuro-hia/realm/main/tunnel.s
 - **监听端口**：填写本节点转发用端口（如 27567）
 - **目标 IP:端口**：填写“落地节点”的 IP 和端口（如 10.1.1.2:27567）
 - **是否为此规则启用 TLS？** 推荐 `y`（自动生成 CA 证书）
+- **选择传输协议**：系统提供 `tcp` / `quic` / `ws` 三种协议可选，默认 `quic`
 
 每条规则都可以独立设置 TLS 证书，适合一机多出口、节点切换。
 
@@ -85,6 +86,7 @@ curl "http://<出口服务器IP>:9001/cgi-bin/ca.cgi?token=<TOKEN>" -o /opt/real
 - **服务器密码**：复制服务端生成的密码
 - **是否启用 TLS？** 推荐 `y`
 - **粘贴 curl 拉取命令**（由出口服务端菜单 [13] 提供），脚本自动下载 CA 证书至 `/opt/realm/ca-出口IP.pem`，支持多出口多证书共存
+- **选择传输协议**：系统提供 `tcp` / `quic` / `ws` 三种可选，需与服务端保持一致
 
 ---
 
