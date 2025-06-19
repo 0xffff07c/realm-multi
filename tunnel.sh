@@ -45,7 +45,7 @@ install_realm() {
         return 1
     fi
 
-    URL="https://github.com/zhboner/realm/releases/download/$VERSION/$PKG"
+    URL="https://ghfast.top/github.com/zhboner/realm/releases/download/$VERSION/$PKG"
     echo "[*] 下载地址: $URL"
 
     cd /tmp
